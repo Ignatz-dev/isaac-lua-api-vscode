@@ -143,3 +143,7 @@ end
 ---@param spritesheet Image
 function Sprite:SetSpritesheet(layer, spritesheet)
 end
+
+---@return Sprite
+function Sprite:Copy()
+end
