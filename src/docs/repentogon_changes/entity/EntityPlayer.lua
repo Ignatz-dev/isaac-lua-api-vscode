@@ -713,7 +713,7 @@ end
 ---@param position? Vector @default: `self.Position`
 ---@param rng? RNG @default: PlayerDropRNG
 ---@param itemPool? ItemPoolType @default: `ItemPoolType.POOL_NULL`.
----@overload fun(pickup: EntityPickup, rng?: RNG, itemPool?: ItemPoolType)
+---@overload fun(self:EntityPlayer, pickup: EntityPickup, rng?: RNG, itemPool?: ItemPoolType)
 function EntityPlayer:SalvageCollectible(collectible, position, rng, itemPool)
 end
 
@@ -1608,4 +1608,23 @@ end
 ---Effect duration of R U A Wizard? pill effect. Starts at `900` when the effect is activated.
 ---@param timer integer
 function EntityPlayer:SetRUAWizardTimer(timer)
+end
+
+---Returns a zero-based index into History's collectibles list (from History:GetCollectiblesHistory())
+---@param slot integer
+---@return integer
+function EntityPlayer:GetInventoryHistoryIndex(slot)
+end
+
+---@param slot integer
+---@return CollectibleType
+function EntityPlayer:GetInventoryCollectible(slot)
+end
+
+---Returns the maximum size of Tainted Isaac's inventory.
+---@return integer
+function EntityPlayer:GetMaxInventorySize()
+end
+
+function _G.EntityPlayer.CalculateBagOfCraftingOutput(collectible)
 end
