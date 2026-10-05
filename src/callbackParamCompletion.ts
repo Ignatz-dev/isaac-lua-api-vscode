@@ -172,7 +172,7 @@ export function inlineParamCompletion(context: vscode.ExtensionContext) {
             } else if (idArg.type === "NumericLiteral"){
                 callbackName = idArg.value;
             } else if (idArg.type === "StringLiteral"){
-                callbackName = idArg.raw;
+                callbackName = idArg.raw.substring(1, idArg.raw.length-1);
             }
             if (callbackName === undefined) {return[];}
 
