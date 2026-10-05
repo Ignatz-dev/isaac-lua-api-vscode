@@ -85,6 +85,7 @@
     },
     "devDependencies": {
         "@types/glob": "^7.2.0",
+        "@types/luaparse": "^0.2.13",
         "@types/mocha": "^9.1.1",
         "@types/node": "14.x",
         "@types/vscode": "^1.140.0",
@@ -99,6 +100,7 @@
     },
     "dependencies": {
         "golden-fleece": "^1.0.9",
-        "isaac-lua-api-vscode": "file:"
+        "isaac-lua-api-vscode": "file:",
+        "luaparse": "^0.3.1"
     }
 }

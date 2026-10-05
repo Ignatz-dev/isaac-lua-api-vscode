@@ -16,6 +16,7 @@
 
 import * as vscode from 'vscode';
 import { getConfig } from './config';
+import * as luaparse from 'luaparse';
 
 interface CallbackArg {
     type: string;
@@ -87,6 +88,56 @@ function findCallback(callbackId: string | number): IsaacCallback | undefined {
 //these have a space by default and no ',' as that is the trigger point for the autocomplete.
 const INLINE_FUNC_STRING = " function()\n\nend";
 
+interface RegisterFuncConfig {
+    idArg: number; //where you define da callback
+    funcArg: number; //where you define da function
+    hasModArg: boolean;
+}
+
+const REGISTER_FUNCTIONS: Record<string, RegisterFuncConfig> = {
+    "AddCallback": { idArg: 0, funcArg: 1, hasModArg: true },
+    "AddPriorityCallback": { idArg: 0, funcArg: 2, hasModArg: true },
+    "StageAPI.AddCallback": { idArg: 1, funcArg: 3, hasModArg: false },
+};
+
+function getCalleePath(node: luaparse.Expression): string | undefined {
+    if (node.type === 'Identifier') {
+        return node.name;
+    }
+    if (node.type === 'MemberExpression') {
+        const base = getCalleePath(node.base);
+        const key = node.identifier.name;
+        if (!base || !key) {return undefined;}
+        return `${base}${node.indexer}${key}`;
+    }
+    return undefined;
+}
+
+function getRegisterConfig(callExpr: luaparse.CallExpression): { cfg: RegisterFuncConfig; offset: number } | undefined {
+    const fullPath = getCalleePath(callExpr.base);
+    var cfg = fullPath ? REGISTER_FUNCTIONS[fullPath] : undefined;
+
+    var name = "";
+    var isColonCall = false;
+
+    if (callExpr.base.type === 'MemberExpression') {
+        name = callExpr.base.identifier.name;
+        isColonCall = callExpr.base.indexer === ':';
+    } else if (callExpr.base.type === 'Identifier') {
+        name = callExpr.base.name;
+    }
+
+    if (!cfg) {
+        cfg = REGISTER_FUNCTIONS[name];
+    }
+
+    if (!cfg) {return undefined;}
+
+    const offset = (!isColonCall && callExpr.base.type === 'MemberExpression' && cfg.hasModArg) ? 1 : 0;
+
+    return { cfg, offset };
+}
+
 export function inlineParamCompletion(context: vscode.ExtensionContext) {
     console.log("callback param inline autocomplete enabled!");
 
@@ -96,13 +147,34 @@ export function inlineParamCompletion(context: vscode.ExtensionContext) {
             const beforeCursor = lineText.slice(0, position.character);
 
             //Step 1: Find the suggestion moment.
+            if(!beforeCursor.trimEnd().endsWith(',')) {return[];}
             if (lineText.includes(')') && position.character > lineText.lastIndexOf(')')) {return [];}
-            const functionName = lineText.substring(0, lineText.indexOf('(')).trim();
-            const suggestionCondition = functionName.toLowerCase().includes('callback') && beforeCursor.trimEnd().endsWith(',');
-            if (!suggestionCondition) {return [];}
-            const paramCount = (beforeCursor.match(/,/g) || []).length;
-            if (functionName.toLowerCase().includes("prioritycallback") && paramCount !== 2) {return [];} //suggest on 3rd param for prio callback
-            //could easily add support for custom multi param callback registration functions here, just replace the func ur looking for and expected param number
+
+            const luaCode = beforeCursor + "nil)";
+            var ast = luaparse.parse(luaCode, {wait: false});
+            const statement = ast.body[0];
+            if (!statement || statement.type !== 'CallStatement') { return []; }
+            
+            const callExpr = statement.expression;
+            if (callExpr.type !== 'CallExpression') { return []; }
+
+            const match = getRegisterConfig(callExpr);
+            if(!match){return[];} 
+            const funcIndex = match.cfg.funcArg + match.offset;
+            const idIndex = match.cfg.idArg + match.offset;
+
+            if((callExpr.arguments.length - 1) !== funcIndex) {return[];}
+
+            var callbackName: string | number | undefined = undefined;
+            const idArg = callExpr.arguments[idIndex];
+            if (idArg.type === "MemberExpression"){
+                callbackName = idArg.identifier.name;
+            } else if (idArg.type === "NumericLiteral"){
+                callbackName = idArg.value;
+            } else if (idArg.type === "StringLiteral"){
+                callbackName = idArg.raw;
+            }
+            if (callbackName === undefined) {return[];}
 
             //Step 2: Transform suggestion contents based on current line contents
             var startString = INLINE_FUNC_STRING;
@@ -110,17 +182,9 @@ export function inlineParamCompletion(context: vscode.ExtensionContext) {
             if (beforeCursor.endsWith(' ')) {startString = startString.substring(1, startString.length);} //used substring cuz trimStart doesnt work here ¯\_(ツ)_/¯
 
             //Step 3: Add params based on callback used
-            const firstParam = beforeCursor.substring(beforeCursor.indexOf('(') + 1, beforeCursor.indexOf(',')).trim();
-            var callbackName;
-            if(firstParam.includes('.')) { //if is an enum and not a number
-                callbackName = firstParam.substring(firstParam.indexOf('.') + 1);
-            } else{
-                callbackName = parseInt(firstParam);
-            }
-
-            var hasModRefParam = true;
-
+            var hasModRefParam = match.cfg.hasModArg;
             var callback = findCallback(callbackName);
+            
             if(callback !== undefined && callback.args !== undefined){
                 var params = callback.args.map((arg, idx) => {
                     const name = arg.name || `unkownArg${idx + 1}`;
