@@ -15,10 +15,11 @@
 // allow the user to change the order of these, along with multiple table sorting (default is most frequently used first), or disable some of these if they wish.
 
 import * as vscode from 'vscode';
+import { getConfig } from './config';
 
 interface CallbackArg {
     type: string;
-    name?: string;
+    name?: string; //we should get the rgon callback json to a point where the question mark can be removed, since it means there are unnamed arguments out there!
 }
 
 interface CallbackReturn {
@@ -33,7 +34,7 @@ interface IsaacCallback {
     param?: {
         type: string;
         name?: string;
-        optional: boolean;
+        optional?: boolean;
     };
     comment?: string;
 }
@@ -44,17 +45,16 @@ import * as jsonVanillaCallbacks from "./docs/enums/callbacks/vanilla.json";
 import * as jsonRgonCallbacks from "./docs/enums/callbacks/repentogon.json";
 import * as jsonStageApiCallbacks from "./docs/enums/callbacks/stageapi.json";
 
+const config = getConfig();
+
 const vanillaCallbacks: Callbacks = jsonVanillaCallbacks;
 const rgonCallbacks: Callbacks = jsonRgonCallbacks;
 const stageApiCallbacks: Callbacks = jsonStageApiCallbacks;
-const callbackTables = [
-    rgonCallbacks, //load before vanilla callbacks so that rgon vanilla overrides take priority
-    vanillaCallbacks,
-    stageApiCallbacks
-];
+const callbackTables: Callbacks[] = [];
 
-//if not RGON then pop rgonCallbacks from callbackTables here
-
+if(config.repentogonEnabled){callbackTables.push(rgonCallbacks);} //load before vanilla callbacks so that rgon vanilla overrides take priority
+callbackTables.push(vanillaCallbacks);
+if(config.stageAPISupportEnabled){callbackTables.push(stageApiCallbacks);}
 
 var callbackByValue = new Map<number, IsaacCallback>();
 
@@ -63,7 +63,7 @@ for (var callbacks of callbackTables) {
         const entry = callbacks[callbackId];
         if (entry.value !== undefined) {
             const numericValue = typeof entry.value === "string" ? parseInt(entry.value, 10) : entry.value;
-            if (!isNaN(numericValue)) {
+            if (!isNaN(numericValue) && callbackByValue.get(numericValue) === undefined) {
                 callbackByValue.set(numericValue, entry);
             }
         }
@@ -109,11 +109,13 @@ export function inlineParamCompletion(context: vscode.ExtensionContext) {
             if (!lineText.trim().endsWith(')')) {startString += ')';}
             if (beforeCursor.endsWith(' ')) {startString = startString.substring(1, startString.length);} //used substring cuz trimStart doesnt work here ¯\_(ツ)_/¯
 
-            //Step 3: Add params based on callback used (lineText or beforeCursor here??)
+            //Step 3: Add params based on callback used
             const firstParam = beforeCursor.substring(beforeCursor.indexOf('(') + 1, beforeCursor.indexOf(',')).trim();
-            var callbackName = firstParam;
+            var callbackName;
             if(firstParam.includes('.')) { //if is an enum and not a number
                 callbackName = firstParam.substring(firstParam.indexOf('.') + 1);
+            } else{
+                callbackName = parseInt(firstParam);
             }
 
             var hasModRefParam = true;
@@ -122,10 +124,15 @@ export function inlineParamCompletion(context: vscode.ExtensionContext) {
             if(callback !== undefined && callback.args !== undefined){
                 var params = callback.args.map((arg, idx) => {
                     const name = arg.name || `unkownArg${idx + 1}`;
-                    return name.charAt(0).toLowerCase() + name.slice(1);
+
+                    if(name === name.toUpperCase()){
+                        return name.toLowerCase();
+                    } else {
+                        return name.charAt(0).toLowerCase() + name.slice(1);
+                    }
                 }).join(", ");
 
-                if (hasModRefParam) {params = "_, " + params;}
+                if (hasModRefParam && params.length > 0) {params = "_, " + params;}
                 
                 startString = startString.replace("()", `(${params})`);
             }
