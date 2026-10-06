@@ -217,14 +217,32 @@ export function inlineParamCompletion(context: vscode.ExtensionContext) {
             }
 
             const finalCompletionItems: vscode.InlineCompletionItem[] = [];
-            for (var finalString of finalCompletionStrings){
-                finalCompletionItems.push(
-                    new vscode.InlineCompletionItem(
-                        finalString,
-                        new vscode.Range(position, position)
-                    )
-                );
-            }
+
+            finalCompletionStrings.map(finalString => {
+                if (!finalString.includes('(')) {
+                    const bodyString = finalBodyStrings[0]; //this is a nono but for now its ok
+                    
+                    //conver this into a function down the line
+                    const indent = beforeCursor.match(/^\s*/)?.[0] || "";
+                    const indentedBody = bodyString.split('\n').map(line => line.length > 0 ? indent + line : line).join('\n');
+                    
+                    const replacementText = `${finalString}\n${indentedBody}\n${lineText + finalString}`;
+                    
+                    finalCompletionItems.push(
+                        new vscode.InlineCompletionItem(
+                            replacementText,
+                            new vscode.Range(position, position)
+                        )
+                    );
+                } else {
+                    finalCompletionItems.push(
+                        new vscode.InlineCompletionItem(
+                            finalString,
+                            new vscode.Range(position, position)
+                        )
+                    );
+                }
+            });
 
             return finalCompletionItems;
         }
