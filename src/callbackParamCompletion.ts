@@ -84,9 +84,17 @@ function findCallback(callbackId: string | number): IsaacCallback | undefined {
 
     return undefined;
 }
-
+    
 //these have a space by default and no ',' as that is the trigger point for the autocomplete.
-const INLINE_FUNC_STRING = " function()\n\nend";
+const INLINE_COMPLETION_STRINGS: string[] = [
+    " function()\n\nend",
+    " hi",
+    //todo: figure out how to handle multiple tables using just 2 strings (also putting their name into here)...
+];
+
+const BODY_COMPLETION_STRINGS: string[] = [
+    "local function hi()\n\nend"
+];
 
 interface RegisterFuncConfig {
     idArg: number; //where you define da callback
@@ -94,11 +102,13 @@ interface RegisterFuncConfig {
     hasModArg: boolean;
 }
 
+/* eslint-disable @typescript-eslint/naming-convention */
 const REGISTER_FUNCTIONS: Record<string, RegisterFuncConfig> = {
     "AddCallback": { idArg: 0, funcArg: 1, hasModArg: true },
     "AddPriorityCallback": { idArg: 0, funcArg: 2, hasModArg: true },
     "StageAPI.AddCallback": { idArg: 1, funcArg: 3, hasModArg: false },
 };
+/* eslint-enable @typescript-eslint/naming-convention */
 
 function getCalleePath(node: luaparse.Expression): string | undefined {
     if (node.type === 'Identifier') {
@@ -176,10 +186,14 @@ export function inlineParamCompletion(context: vscode.ExtensionContext) {
             }
             if (callbackName === undefined) {return[];}
 
-            //Step 2: Transform suggestion contents based on current line contents
-            var startString = INLINE_FUNC_STRING;
-            if (!lineText.trim().endsWith(')')) {startString += ')';}
-            if (beforeCursor.endsWith(' ')) {startString = startString.substring(1, startString.length);} //used substring cuz trimStart doesnt work here ¯\_(ツ)_/¯
+            //Step 2: Transform suggestion contents based on current line contents (only for inline)
+            var finalCompletionStrings = INLINE_COMPLETION_STRINGS.map(startString => {
+                if (!lineText.trim().endsWith(')')) {startString += ')';}
+                if (beforeCursor.endsWith(' ')) {startString = startString.substring(1, startString.length);} //used substring cuz trimStart doesnt work here ¯\_(ツ)_/¯
+                return startString;
+            });
+
+            var finalBodyStrings = BODY_COMPLETION_STRINGS;
 
             //Step 3: Add params based on callback used
             var hasModRefParam = match.cfg.hasModArg;
@@ -198,20 +212,21 @@ export function inlineParamCompletion(context: vscode.ExtensionContext) {
 
                 if (hasModRefParam && params.length > 0) {params = "_, " + params;}
                 
-                startString = startString.replace("()", `(${params})`);
+                finalCompletionStrings = finalCompletionStrings.map(finalString => finalString.replace("()", `(${params})`));
+                finalBodyStrings = finalBodyStrings.map(finalString => finalString.replace("()", `(${params})`));
             }
 
+            const finalCompletionItems: vscode.InlineCompletionItem[] = [];
+            for (var finalString of finalCompletionStrings){
+                finalCompletionItems.push(
+                    new vscode.InlineCompletionItem(
+                        finalString,
+                        new vscode.Range(position, position)
+                    )
+                );
+            }
 
-            return[
-                new vscode.InlineCompletionItem(
-                    startString,
-                    new vscode.Range(position, position)
-                ),
-                new vscode.InlineCompletionItem(
-                    "hi",
-                    new vscode.Range(position, position)
-                )
-            ];
+            return finalCompletionItems;
         }
     };
 
