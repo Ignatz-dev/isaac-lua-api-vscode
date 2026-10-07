@@ -16,7 +16,24 @@
 
 import * as vscode from 'vscode';
 import { getConfig } from './config';
+import { Constants } from './constants';
 import * as luaparse from 'luaparse';
+
+export function walk(node: unknown, visitor: (node: luaparse.Node) => boolean | void): void {
+  if (!node || typeof node !== 'object') {return;}
+  
+  if ('type' in node && typeof node.type === 'string') {
+    if (visitor(node as luaparse.Node) === false) {return;}
+  }
+
+  for (const value of Object.values(node)) {
+    if (Array.isArray(value)) {
+      value.forEach(item => walk(item, visitor));
+    } else if (value && typeof value === 'object' && 'type' in value) {
+      walk(value, visitor);
+    }
+  }
+}
 
 interface CallbackArg {
     type: string;
@@ -110,6 +127,27 @@ const REGISTER_FUNCTIONS: Record<string, RegisterFuncConfig> = {
 };
 /* eslint-enable @typescript-eslint/naming-convention */
 
+function getCallbackTablesFromLua(ast: luaparse.Chunk): string[]{
+    const tableCounts: Record<string, number> = {};
+
+    walk(ast, (node) => {
+        if(node.type === "FunctionDeclaration"){
+            if(node.identifier && node.identifier.type === "MemberExpression"){
+                if(node.identifier.base.type === "Identifier"){
+                    const base = node.identifier.base.name;
+                    const funcName = node.identifier.identifier.name;
+
+                    if (!REGISTER_FUNCTIONS[funcName] && node.identifier.indexer === ":") {
+                        tableCounts[base] = (tableCounts[base] ?? 0) + 1;
+                    }
+                }
+            }
+        }
+    });
+
+    return Object.keys(tableCounts).sort((a, b) => tableCounts[b] - tableCounts[a]);
+}
+
 function getCalleePath(node: luaparse.Expression): string | undefined {
     if (node.type === 'Identifier') {
         return node.name;
@@ -148,6 +186,22 @@ function getRegisterConfig(callExpr: luaparse.CallExpression): { cfg: RegisterFu
     return { cfg, offset };
 }
 
+vscode.commands.registerCommand(`${Constants.EXT_ID}.deleteLineXBack`, async (x: number) => {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {return;}
+
+  const targetLine = Math.max(0, editor.selection.active.line - x);
+  const line = editor.document.lineAt(targetLine);
+
+  await editor.edit(editBuilder => {
+    editBuilder.delete(line.rangeIncludingLineBreak);
+  });
+
+  const position = new vscode.Position(Math.min(targetLine, editor.document.lineCount - 1), 0);
+  editor.selection = new vscode.Selection(position, position);
+});
+
+
 export function inlineParamCompletion(context: vscode.ExtensionContext) {
     console.log("callback param inline autocomplete enabled!");
 
@@ -160,9 +214,9 @@ export function inlineParamCompletion(context: vscode.ExtensionContext) {
             if(!beforeCursor.trimEnd().endsWith(',')) {return[];}
             if (lineText.includes(')') && position.character > lineText.lastIndexOf(')')) {return [];}
 
-            const luaCode = beforeCursor + "nil)";
-            var ast = luaparse.parse(luaCode, {wait: false});
-            const statement = ast.body[0];
+            const luaLineCode = beforeCursor + "nil)";
+            var lineAST = luaparse.parse(luaLineCode, {wait: false});
+            const statement = lineAST.body[0];
             if (!statement || statement.type !== 'CallStatement') { return []; }
             
             const callExpr = statement.expression;
@@ -186,13 +240,26 @@ export function inlineParamCompletion(context: vscode.ExtensionContext) {
             }
             if (callbackName === undefined) {return[];}
 
-            //Step 2: Transform suggestion contents based on current line contents (only for inline)
-            var finalCompletionStrings = INLINE_COMPLETION_STRINGS.map(startString => {
+            //Step 2: Transform suggestion contents based on current line contents (only for inline) (also add tables used to define funcs)
+            const allLuaCode = document.getText(new vscode.Range(new vscode.Position(0, 0), new vscode.Position(position.line-1, 0)));
+            var allAST = luaparse.parse(allLuaCode, {wait: false});
+            const sortedTables = getCallbackTablesFromLua(allAST);
+
+            const formattedCallbackName = typeof callbackName === "string" 
+                ? callbackName.toLowerCase().split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('')
+                : `Callback${callbackName}`;
+
+            var dynamicallyGeneratedStrings: string[] = [...INLINE_COMPLETION_STRINGS];
+
+            sortedTables.map((tableName) => {
+                dynamicallyGeneratedStrings.push(` ${tableName}.${formattedCallbackName}`);
+            });
+
+            var finalCompletionStrings = dynamicallyGeneratedStrings.map(startString => {
                 if (!lineText.trim().endsWith(')')) {startString += ')';}
                 if (beforeCursor.endsWith(' ')) {startString = startString.substring(1, startString.length);} //used substring cuz trimStart doesnt work here ¯\_(ツ)_/¯
                 return startString;
             });
-
             var finalBodyStrings = BODY_COMPLETION_STRINGS;
 
             //Step 3: Add params based on callback used
@@ -226,14 +293,22 @@ export function inlineParamCompletion(context: vscode.ExtensionContext) {
                     const indent = beforeCursor.match(/^\s*/)?.[0] || "";
                     const indentedBody = bodyString.split('\n').map(line => line.length > 0 ? indent + line : line).join('\n');
                     
-                    const replacementText = `${finalString}\n${indentedBody}\n${lineText + finalString}`;
+                    var finalLineText = lineText;
+                    if(lineText.trimEnd().endsWith(')')) {finalLineText = lineText.slice(0, -1);}
+                    const replacementText = `${finalString}\n${indentedBody}\n${finalLineText + finalString}`;
                     
-                    finalCompletionItems.push(
-                        new vscode.InlineCompletionItem(
-                            replacementText,
-                            new vscode.Range(position, position)
-                        )
+                    const completionItem = new vscode.InlineCompletionItem(
+                        replacementText,
+                        new vscode.Range(position, position)
                     );
+
+                    completionItem.command = {
+                        title: "Delete Line",
+                        command: `${Constants.EXT_ID}.deleteLineXBack`,
+                        arguments: [bodyString.split('\n').length + 1]
+                    };
+
+                    finalCompletionItems.push(completionItem);
                 } else {
                     finalCompletionItems.push(
                         new vscode.InlineCompletionItem(
