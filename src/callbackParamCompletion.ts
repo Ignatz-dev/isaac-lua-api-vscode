@@ -101,17 +101,6 @@ function findCallback(callbackId: string | number): IsaacCallback | undefined {
 
     return undefined;
 }
-    
-//these have a space by default and no ',' as that is the trigger point for the autocomplete.
-const INLINE_COMPLETION_STRINGS: string[] = [
-    " function()\n\nend",
-    " hi",
-    //todo: figure out how to handle multiple tables using just 2 strings (also putting their name into here)...
-];
-
-const BODY_COMPLETION_STRINGS: string[] = [
-    "local function hi()\n\nend"
-];
 
 interface RegisterFuncConfig {
     idArg: number; //where you define da callback
@@ -146,6 +135,37 @@ function getCallbackTablesFromLua(ast: luaparse.Chunk): string[]{
     });
 
     return Object.keys(tableCounts).sort((a, b) => tableCounts[b] - tableCounts[a]);
+}
+
+function getFuncNameFromCallback(callbackName: string): string{
+    const words = callbackName.split("_");
+
+    //am i even a good programmer at this point...
+    var funcName = "";
+    if (words[1] === "PRE"){
+        funcName += "pre";
+        words.map((word, idx) => {
+            if (idx > 1){
+                funcName += word.charAt(0) + word.substring(1).toLowerCase();
+            }
+        });
+    } else if (words[1] === "POST") {
+        funcName += "on";
+        words.map((word, idx) => {
+            if (idx > 1){
+                funcName += word.charAt(0) + word.substring(1).toLowerCase();
+            }
+        });
+    } else {
+        funcName += "on";
+        words.map((word, idx) => {
+            if (idx > 0){
+                funcName += word.charAt(0) + word.substring(1).toLowerCase();
+            }
+        });
+    }
+
+    return funcName;
 }
 
 function getCalleePath(node: luaparse.Expression): string | undefined {
@@ -201,6 +221,11 @@ vscode.commands.registerCommand(`${Constants.EXT_ID}.deleteLineXBack`, async (x:
   editor.selection = new vscode.Selection(position, position);
 });
 
+interface CompletionPair {
+    inlineString: string; //these have a space by default and no ',' as that is the trigger point for the autocomplete.
+    bodyString: string;
+    isColonMethod: boolean;
+}
 
 export function inlineParamCompletion(context: vscode.ExtensionContext) {
     console.log("callback param inline autocomplete enabled!");
@@ -217,10 +242,10 @@ export function inlineParamCompletion(context: vscode.ExtensionContext) {
             const luaLineCode = beforeCursor + "nil)";
             var lineAST = luaparse.parse(luaLineCode, {wait: false});
             const statement = lineAST.body[0];
-            if (!statement || statement.type !== 'CallStatement') { return []; }
+            if (!statement || statement.type !== 'CallStatement') {return [];}
             
             const callExpr = statement.expression;
-            if (callExpr.type !== 'CallExpression') { return []; }
+            if (callExpr.type !== 'CallExpression') {return [];}
 
             const match = getRegisterConfig(callExpr);
             if(!match){return[];} 
@@ -240,34 +265,41 @@ export function inlineParamCompletion(context: vscode.ExtensionContext) {
             }
             if (callbackName === undefined) {return[];}
 
-            //Step 2: Transform suggestion contents based on current line contents (only for inline) (also add tables used to define funcs)
+            //Step 2: Get the function name from callback used, and insert it into inline suggestions
             const allLuaCode = document.getText(new vscode.Range(new vscode.Position(0, 0), new vscode.Position(position.line-1, 0)));
             var allAST = luaparse.parse(allLuaCode, {wait: false});
             const sortedTables = getCallbackTablesFromLua(allAST);
 
-            const formattedCallbackName = typeof callbackName === "string" 
-                ? callbackName.toLowerCase().split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('')
-                : `Callback${callbackName}`;
+            const funcName = typeof callbackName === "string" ? getFuncNameFromCallback(callbackName) : "placeholder";
 
-            var dynamicallyGeneratedStrings: string[] = [...INLINE_COMPLETION_STRINGS];
+            const completionPairs: CompletionPair[] = [
+                {
+                    inlineString: " function()\n\nend",
+                    bodyString: "",
+                    isColonMethod: false
+                },
+                {
+                    inlineString: ` ${funcName}`,
+                    bodyString: `local function ${funcName}()\n\nend`,
+                    isColonMethod: false
+                }
+            ];
 
-            sortedTables.map((tableName) => {
-                dynamicallyGeneratedStrings.push(` ${tableName}.${formattedCallbackName}`);
+            sortedTables.forEach(tableName => {
+                completionPairs.push({
+                    inlineString: ` ${tableName}.${funcName}`,
+                    bodyString: `function ${tableName}:${funcName}()\n\nend`,
+                    isColonMethod: true
+                });
             });
-
-            var finalCompletionStrings = dynamicallyGeneratedStrings.map(startString => {
-                if (!lineText.trim().endsWith(')')) {startString += ')';}
-                if (beforeCursor.endsWith(' ')) {startString = startString.substring(1, startString.length);} //used substring cuz trimStart doesnt work here ¯\_(ツ)_/¯
-                return startString;
-            });
-            var finalBodyStrings = BODY_COMPLETION_STRINGS;
 
             //Step 3: Add params based on callback used
             var hasModRefParam = match.cfg.hasModArg;
             var callback = findCallback(callbackName);
             
+            var callbackParams: string[] = [];
             if(callback !== undefined && callback.args !== undefined){
-                var params = callback.args.map((arg, idx) => {
+                callbackParams = callback.args.map((arg, idx) => {
                     const name = arg.name || `unkownArg${idx + 1}`;
 
                     if(name === name.toUpperCase()){
@@ -275,27 +307,37 @@ export function inlineParamCompletion(context: vscode.ExtensionContext) {
                     } else {
                         return name.charAt(0).toLowerCase() + name.slice(1);
                     }
-                }).join(", ");
-
-                if (hasModRefParam && params.length > 0) {params = "_, " + params;}
-                
-                finalCompletionStrings = finalCompletionStrings.map(finalString => finalString.replace("()", `(${params})`));
-                finalBodyStrings = finalBodyStrings.map(finalString => finalString.replace("()", `(${params})`));
+                });
             }
 
             const finalCompletionItems: vscode.InlineCompletionItem[] = [];
+            
+            completionPairs.map((pair) => {
+                var inlineStr = pair.inlineString;
+                var bodyStr = pair.bodyString;
 
-            finalCompletionStrings.map(finalString => {
-                if (!finalString.includes('(')) {
-                    const bodyString = finalBodyStrings[0]; //this is a nono but for now its ok
-                    
-                    //conver this into a function down the line
-                    const indent = beforeCursor.match(/^\s*/)?.[0] || "";
-                    const indentedBody = bodyString.split('\n').map(line => line.length > 0 ? indent + line : line).join('\n');
+                var paramsList = [...callbackParams];
+
+                //prolly will be coming back to this condition later since it kinda irks me
+                if (hasModRefParam && !pair.isColonMethod) {
+                    paramsList.unshift("_");
+                }
+
+                const paramString = paramsList.join(", ");
+
+                inlineStr = inlineStr.replace("()", `(${paramString})`);
+                bodyStr = bodyStr.replace("()", `(${paramString})`);
+
+                if (!lineText.trim().endsWith(')')) { inlineStr += ')'; }
+                if (beforeCursor.endsWith(' ')) { inlineStr = inlineStr.substring(1); }
+
+                const indent = beforeCursor.match(/^\s*/)?.[0] || "";
+                if (!inlineStr.includes('(')) {
+                    const indentedBody = bodyStr.split('\n').map(line => indent + line).join('\n');
                     
                     var finalLineText = lineText;
-                    if(lineText.trimEnd().endsWith(')')) {finalLineText = lineText.slice(0, -1);}
-                    const replacementText = `${finalString}\n${indentedBody}\n${finalLineText + finalString}`;
+                    if (lineText.trimEnd().endsWith(')')) { finalLineText = lineText.slice(0, -1); }
+                    const replacementText = `${inlineStr}\n${indentedBody}\n${finalLineText + inlineStr}`;
                     
                     const completionItem = new vscode.InlineCompletionItem(
                         replacementText,
@@ -305,14 +347,16 @@ export function inlineParamCompletion(context: vscode.ExtensionContext) {
                     completionItem.command = {
                         title: "Delete Line",
                         command: `${Constants.EXT_ID}.deleteLineXBack`,
-                        arguments: [bodyString.split('\n').length + 1]
+                        arguments: [bodyStr.split('\n').length + 1]
                     };
 
                     finalCompletionItems.push(completionItem);
                 } else {
+                    const indentedInline = inlineStr.split('\n').map(line => line.includes("end") ? indent + line : line).join('\n');
+
                     finalCompletionItems.push(
                         new vscode.InlineCompletionItem(
-                            finalString,
+                            indentedInline,
                             new vscode.Range(position, position)
                         )
                     );
