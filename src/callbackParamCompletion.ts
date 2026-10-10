@@ -1,19 +1,3 @@
-//THE PLAN:
-//Find tables used to refer to functions in callback functions and sort them by frequency of use
-//
-//Figure out suggestion moment:
-//Last parameter (after ',') of function with the word 'callback' in it, regardless of capitalization. ALSO dont suggest after a ')'
-//If this is too problematic, bind it to a "custom callback functions" option, that can be turned off in order to opt in to just a hardcoded check (AddCallback and AddPriorityCallback)
-//
-//Based on Callback used, add params to suggestion string
-//
-//Once we hit the suggestion moment suggest all off these options:
-//1. inline function | function(_, params)
-//2. local function above callback (with cursor snapping to function name) | local function _cursor(_, params)
-//3. same as above except its attached to a table (do this for all tables that are detected to be used 4 callbacks in order of most to least used) | function table:_cursor(params)
-// For this ^^^ make sure _cursor is both in the function position and also in the func registration position in AddCallback()
-// allow the user to change the order of these, along with multiple table sorting (default is most frequently used first), or disable some of these if they wish.
-
 import * as vscode from 'vscode';
 import { getConfig } from './config';
 import { Constants } from './constants';
