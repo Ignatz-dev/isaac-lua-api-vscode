@@ -206,19 +206,29 @@ function getRegisterConfig(callExpr: luaparse.CallExpression): { cfg: RegisterFu
     return { cfg, offset };
 }
 
-vscode.commands.registerCommand(`${Constants.EXT_ID}.deleteLineXBack`, async (x: number) => {
+vscode.commands.registerCommand(`${Constants.EXT_ID}.deleteLineXBack`, async (backAmount: number, text: string, funcName: string) => {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {return;}
 
-  const targetLine = Math.max(0, editor.selection.active.line - x);
+  const targetLine = Math.max(0, editor.selection.active.line - backAmount);
   const line = editor.document.lineAt(targetLine);
 
   await editor.edit(editBuilder => {
     editBuilder.delete(line.rangeIncludingLineBreak);
   });
 
-  const position = new vscode.Position(Math.min(targetLine, editor.document.lineCount - 1), 0);
-  editor.selection = new vscode.Selection(position, position);
+  const lines = text.split('\n');
+  const selections: vscode.Selection[] = [];
+  lines.forEach((line, idx) => {
+    if (line.includes(funcName) && idx > 0){ //skip first iteration cuz thats actually the inline string that gets deleted, also we substract by one cuz we removed a line earlier
+        const start = new vscode.Position(targetLine + idx - 1, line.indexOf(funcName));
+        const end = new vscode.Position(targetLine + idx - 1, line.indexOf(funcName) + funcName.length);
+
+        selections.push(new vscode.Selection(start, end));
+    }
+  });
+
+  editor.selections = selections;
 });
 
 interface CompletionPair {
@@ -347,7 +357,7 @@ export function inlineParamCompletion(context: vscode.ExtensionContext) {
                     completionItem.command = {
                         title: "Delete Line",
                         command: `${Constants.EXT_ID}.deleteLineXBack`,
-                        arguments: [bodyStr.split('\n').length + 1]
+                        arguments: [bodyStr.split('\n').length + 1, replacementText, funcName]
                     };
 
                     finalCompletionItems.push(completionItem);
